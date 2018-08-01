@@ -727,8 +727,13 @@ void QCamera2HardwareInterface::synchronous_stream_cb_routine(
     }
 
     frameTime = nsecs_t(frame->ts.tv_sec) * 1000000000LL + frame->ts.tv_nsec;
+    // Convert Boottime from camera to Monotime for display if needed.
+    // Otherwise, mBootToMonoTimestampOffset value will be 0.
+    frameTime = frameTime - pme->mBootToMonoTimestampOffset;
     // Calculate the future presentation time stamp for displaying frames at regular interval
-    mPreviewTimestamp = pme->mCameraDisplay.computePresentationTimeStamp(frameTime);
+    if (pme->getRecordingHintValue() == true) {
+        mPreviewTimestamp = pme->mCameraDisplay.computePresentationTimeStamp(frameTime);
+    }
     stream->mStreamTimestamp = frameTime;
     memory = (QCameraGrallocMemory *)super_frame->bufs[0]->mem_info;
 
@@ -1555,6 +1560,15 @@ void QCamera2HardwareInterface::video_stream_cb_routine(mm_camera_super_buf_t *s
             cbArg.cb_type = QCAMERA_DATA_TIMESTAMP_CALLBACK;
             cbArg.msg_type = CAMERA_MSG_VIDEO_FRAME;
             cbArg.data = video_mem;
+
+            // For VT usecase, ISP uses AVtimer not CLOCK_BOOTTIME as time source.
+            // So do not change video timestamp.
+            if (!pme->mParameters.isAVTimerEnabled()) {
+                // Convert Boottime from camera to Monotime for video if needed.
+                // Otherwise, mBootToMonoTimestampOffset value will be 0.
+                timeStamp = timeStamp - pme->mBootToMonoTimestampOffset;
+            }
+            LOGD("Final video buffer TimeStamp : %lld ", timeStamp);
             cbArg.timestamp = timeStamp;
             int32_t rc = pme->m_cbNotifier.notifyCallback(cbArg);
             if (rc != NO_ERROR) {
@@ -2144,6 +2158,10 @@ void QCamera2HardwareInterface::metadata_stream_cb_routine(mm_camera_super_buf_t
                 }
                 IF_META_AVAILABLE(uint32_t, focusMode, CAM_INTF_PARM_FOCUS_MODE, pMetaData) {
                     payload->focus_data.focus_mode = (cam_focus_mode_type)(*focusMode);
+                }
+                IF_META_AVAILABLE(uint8_t, isDepthFocus,
+                        CAM_INTF_META_FOCUS_DEPTH_INFO, pMetaData) {
+                    payload->focus_data.isDepth = *isDepthFocus;
                 }
                 int32_t rc = pme->processEvt(QCAMERA_SM_EVT_EVT_INTERNAL, payload);
                 if (rc != NO_ERROR) {

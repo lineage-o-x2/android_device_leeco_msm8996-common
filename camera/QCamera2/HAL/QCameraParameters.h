@@ -24,7 +24,7 @@
 #include <cutils/properties.h>
 
 // System dependencies
-#include <CameraParameters.h>
+//#include <camera/CameraParameters.h>
 #include <utils/Errors.h>
 
 // Camera dependencies
@@ -33,14 +33,13 @@
 #include "QCameraParametersIntf.h"
 #include "QCameraThermalAdapter.h"
 #include "QCameraCommon.h"
+#include "CameraParameters.h"
 
 
 extern "C" {
 #include "mm_jpeg_interface.h"
 }
 
-using ::android::hardware::camera::common::V1_0::helper::CameraParameters;
-using ::android::hardware::camera::common::V1_0::helper::Size;
 using namespace android;
 
 namespace qcamera {
@@ -714,8 +713,10 @@ public:
     bool isAutoHDREnabled();
     int32_t stopAEBracket();
     int32_t updateRAW(cam_dimension_t max_dim);
+    bool isAVTimerEnabled();
     bool isDISEnabled();
-    cam_is_type_t getISType();
+    int32_t setISType();
+    cam_is_type_t getVideoISType();
     cam_is_type_t getPreviewISType();
     uint8_t getMobicatMask();
 
@@ -802,7 +803,7 @@ public:
     int32_t configureAEBracketing(cam_capture_frame_config_t &frame_config);
     int32_t configureHDRBracketing(cam_capture_frame_config_t &frame_config);
     int32_t configFrameCapture(bool commitSettings);
-    int32_t resetFrameCapture(bool commitSettings);
+    int32_t resetFrameCapture(bool commitSettings, bool lowLightEnabled);
     cam_still_more_t getStillMoreSettings() {return m_stillmore_config;};
     void setStillMoreSettings(cam_still_more_t stillmore_config)
             {m_stillmore_config = stillmore_config;};
@@ -924,6 +925,9 @@ private:
     int32_t setTruePortrait(const QCameraParameters& );
     int32_t setSeeMore(const QCameraParameters& );
     int32_t setStillMore(const QCameraParameters& );
+#ifdef TARGET_TS_MAKEUP
+    int32_t setTsMakeup(const QCameraParameters& );
+#endif
     int32_t setNoiseReductionMode(const QCameraParameters& );
     int32_t setRedeyeReduction(const QCameraParameters& );
     int32_t setGpsLocation(const QCameraParameters& );
@@ -1029,7 +1033,6 @@ private:
     bool isTNRPreviewEnabled() {return m_bTNRPreviewOn;};
     bool isTNRVideoEnabled() {return m_bTNRVideoOn;};
     bool getFaceDetectionOption() { return  m_bFaceDetectionOn;}
-    bool isAVTimerEnabled();
     void getLiveSnapshotSize(cam_dimension_t &dim);
     int32_t getRawSize(cam_dimension_t &dim) {dim = m_rawSize; return NO_ERROR;};
     int getAutoFlickerMode();
@@ -1116,7 +1119,7 @@ private:
     cam_sync_related_sensors_event_info_t *m_pRelCamSyncBuf;
     cam_sync_related_sensors_event_info_t m_relCamSyncInfo;
     bool m_bFrameSyncEnabled;
-    cam_is_type_t mIsType;
+    cam_is_type_t mIsTypeVideo;
     cam_is_type_t mIsTypePreview;
 
     bool m_bZslMode;                // if ZSL is enabled

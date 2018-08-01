@@ -633,6 +633,13 @@ int32_t QCameraPostProcessor::getJpegEncodingConfig(mm_jpeg_encode_params_t& enc
             (img_fmt_thumb != CAM_FORMAT_YUV_420_NV12_UBWC) &&
             (m_parent->mParameters.useJpegExifRotation() ||
             m_parent->mParameters.getJpegRotation() == 0);
+
+        if (encode_parm.thumb_from_postview &&
+          m_parent->mParameters.useJpegExifRotation()){
+          encode_parm.thumb_rotation =
+            m_parent->mParameters.getJpegExifRotation();
+        }
+
         LOGI("Src THUMB buf_cnt = %d, res = %dX%d len = %d rot = %d "
             "src_dim = %dX%d, dst_dim = %dX%d",
             encode_parm.num_tmb_bufs,
@@ -642,10 +649,6 @@ int32_t QCameraPostProcessor::getJpegEncodingConfig(mm_jpeg_encode_params_t& enc
             encode_parm.thumb_dim.src_dim.height,
             encode_parm.thumb_dim.dst_dim.width,
             encode_parm.thumb_dim.dst_dim.height);
-    }
-
-    if (m_parent->mParameters.useJpegExifRotation()){
-        encode_parm.thumb_rotation = m_parent->mParameters.getJpegExifRotation();
     }
 
     encode_parm.num_dst_bufs = 1;
@@ -813,9 +816,9 @@ bool QCameraPostProcessor::validatePostProcess(mm_camera_super_buf_t *frame)
         for (uint8_t i = 0; i < m_pReprocChannel->getNumOfStreams(); i++) {
             pStream = m_pReprocChannel->getStreamByIndex(i);
             if (pStream && (m_inputPPQ.getCurrentSize() > 0) &&
-                    (pStream->getNumQueuedBuf() <= 0)) {
+                    (m_ongoingPPQ.getCurrentSize() >=  pStream->getNumQueuedBuf())) {
                 LOGW("Out of PP Buffer PPQ = %d ongoingQ = %d Jpeg = %d onJpeg = %d",
-                        m_inputPPQ.getCurrentSize(), m_inputPPQ.getCurrentSize(),
+                        m_inputPPQ.getCurrentSize(), m_ongoingPPQ.getCurrentSize(),
                         m_inputJpegQ.getCurrentSize(), m_ongoingJpegQ.getCurrentSize());
                 status = FALSE;
                 break;
@@ -1425,6 +1428,50 @@ int32_t QCameraPostProcessor::processPPData(mm_camera_super_buf_t *frame)
         if (meta_frame != NULL) {
             // fill in meta data frame ptr
             jpeg_job->metadata = (metadata_buffer_t *)meta_frame->buffer;
+        }
+
+        if (m_parent->mParameters.getQuadraCfa()) {
+            // find offline metadata frame for quadra CFA
+            mm_camera_buf_def_t *pOfflineMetaFrame = NULL;
+            QCameraStream * pOfflineMetadataStream = NULL;
+            QCameraChannel *pChannel = m_parent->getChannelByHandle(frame->ch_id);
+            if (pChannel == NULL) {
+                for (int8_t i = 0; i < mPPChannelCount; i++) {
+                    if ((mPPChannels[i] != NULL) &&
+                            (mPPChannels[i]->getMyHandle() == frame->ch_id)) {
+                        pChannel = mPPChannels[i];
+                        break;
+                    }
+                }
+            }
+            if (pChannel == NULL) {
+                LOGE("No corresponding channel (ch_id = %d) exist, return here",
+                        frame->ch_id);
+                return BAD_VALUE;
+            }
+
+            for (uint32_t i = 0; i < frame->num_bufs; i++) {
+                pOfflineMetadataStream = pChannel->getStreamByHandle(frame->bufs[i]->stream_id);
+                if (pOfflineMetadataStream != NULL) {
+                    if (pOfflineMetadataStream->isOrignalTypeOf(CAM_STREAM_TYPE_METADATA)) {
+                        pOfflineMetaFrame = frame->bufs[i];
+                        break;
+                    }
+                }
+            }
+            if (pOfflineMetaFrame != NULL) {
+                // fill in meta data frame ptr
+                jpeg_job->metadata = (metadata_buffer_t *)pOfflineMetaFrame->buffer;
+
+                // Dump offline metadata for Tuning
+                char value[PROPERTY_VALUE_MAX];
+                property_get("persist.camera.dumpmetadata", value, "0");
+                int32_t enabled = atoi(value);
+                if (enabled && jpeg_job->metadata->is_tuning_params_valid) {
+                    m_parent->dumpMetadataToFile(pOfflineMetadataStream,pOfflineMetaFrame,
+                                                 (char *)"Offline_isp_meta");
+                }
+            }
         }
 
         // enqueu reprocessed frame to jpeg input queue

@@ -567,9 +567,12 @@ typedef struct {
     uint32_t meta_stream_handle;  /* meta data stream ID. only valid if meta_present != 0 */
     uint32_t meta_buf_index;      /* buf index to meta data buffer. only valid if meta_present != 0 */
 
+    uint8_t is_offline_meta_bypass;
+
     /* opaque metadata required for reprocessing */
     int32_t private_data[MAX_METADATA_PRIVATE_PAYLOAD_SIZE_IN_BYTES];
     cam_rect_t crop_rect;
+    uint8_t is_uv_subsampled;
 } cam_reprocess_param;
 
 typedef struct {
@@ -785,7 +788,7 @@ typedef struct {
     /* Specific to HAL3 */
     INCLUDE(CAM_INTF_META_FRAME_NUMBER_VALID,           int32_t,                     1);
     INCLUDE(CAM_INTF_META_URGENT_FRAME_NUMBER_VALID,    int32_t,                     1);
-    INCLUDE(CAM_INTF_META_FRAME_DROPPED,                cam_frame_dropped_t,         1);
+    INCLUDE(CAM_INTF_META_FRAME_DROPPED,                cam_stream_ID_t,             1);
     INCLUDE(CAM_INTF_META_FRAME_NUMBER,                 uint32_t,                    1);
     INCLUDE(CAM_INTF_META_URGENT_FRAME_NUMBER,          uint32_t,                    1);
     INCLUDE(CAM_INTF_META_COLOR_CORRECT_MODE,           uint32_t,                    1);
@@ -982,6 +985,10 @@ typedef struct {
     INCLUDE(CAM_INTF_PARM_INITIAL_EXPOSURE_INDEX,       uint32_t,                    1);
     INCLUDE(CAM_INTF_PARM_INSTANT_AEC,                  uint8_t,                     1);
     INCLUDE(CAM_INTF_META_REPROCESS_FLAGS,              uint8_t,                     1);
+    INCLUDE(CAM_INTF_PARM_JPEG_ENCODE_CROP,             cam_stream_crop_info_t,      1);
+    INCLUDE(CAM_INTF_PARM_JPEG_SCALE_DIMENSION,         cam_dimension_t,             1);
+    INCLUDE(CAM_INTF_META_FOCUS_DEPTH_INFO,             uint8_t,                     1);
+    INCLUDE(CAM_INTF_PARM_HAL_BRACKETING_HDR,           cam_hdr_param_t,             1);
 } metadata_data_t;
 
 /* Update clear_metadata_buffer() function when a new is_xxx_valid is added to

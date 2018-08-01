@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -31,11 +31,12 @@
 #define __QCAMERA3HARDWAREINTERFACE_H__
 
 // System dependencies
-#include <CameraMetadata.h>
 #include <pthread.h>
 #include <utils/KeyedVector.h>
 #include <utils/List.h>
+#include "CameraMetadata.h"
 
+#include <map>
 // Camera dependencies
 #include "hardware/camera3.h"
 #include "QCamera3Channel.h"
@@ -50,11 +51,12 @@ extern "C" {
 #include "mm_jpeg_interface.h"
 }
 
-using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 using namespace android;
 
 
 namespace qcamera {
+
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 
 #ifndef TRUE
 #define TRUE 1
@@ -65,10 +67,18 @@ namespace qcamera {
 #endif
 
 /* Time related macros */
-typedef int64_t nsecs_t;
 #define NSEC_PER_SEC 1000000000LLU
 #define NSEC_PER_USEC 1000LLU
 #define NSEC_PER_33MSEC 33000000LLU
+
+/*Orchestrate Macros */
+#define EV_COMP_SETTLE_DELAY   2
+#define GB_HDR_HALF_STEP_EV -6
+#define GB_HDR_2X_STEP_EV 6
+
+#define FRAME_REGISTER_LRU_SIZE 256
+#define INTERNAL_FRAME_STARTING_NUMBER 800
+#define EMPTY_FRAMEWORK_FRAME_NUMBER 0xFFFFFFFF
 
 typedef enum {
     SET_ENABLE,
@@ -99,6 +109,8 @@ typedef struct {
     camera3_stream_t *stream;
     // Buffer handle
     buffer_handle_t *buffer;
+    // Buffer status
+    camera3_buffer_status_t bufStatus = CAMERA3_BUFFER_STATUS_OK;
 } PendingBufferInfo;
 
 typedef struct {
@@ -117,8 +129,26 @@ public:
     List<PendingBuffersInRequest> mPendingBuffersInRequest;
     uint32_t get_num_overall_buffers();
     void removeBuf(buffer_handle_t *buffer);
+    int32_t getBufErrStatus(buffer_handle_t *buffer);
 };
 
+class FrameNumberRegistry {
+public:
+
+    FrameNumberRegistry();
+    ~FrameNumberRegistry();
+    int32_t allocStoreInternalFrameNumber(uint32_t frameworkFrameNumber,
+            uint32_t &internalFrameNumber);
+    int32_t generateStoreInternalFrameNumber(uint32_t &internalFrameNumber);
+    int32_t freeInternalFrameNumber(uint32_t internalFrameNumber);
+    int32_t getFrameworkFrameNumber(uint32_t internalFrameNumber, uint32_t &frameworkFrameNumber);
+    void purgeOldEntriesLocked();
+
+private:
+    std::map<uint32_t, uint32_t> _register;
+    uint32_t _nextFreeInternalNumber;
+    Mutex mRegistryLock;
+};
 
 class QCamera3HardwareInterface {
 public:
@@ -147,6 +177,12 @@ public:
                                           void *user_data);
     int openCamera(struct hw_device_t **hw_device);
     camera_metadata_t* translateCapabilityToMetadata(int type);
+
+    typedef struct {
+        camera3_stream_t *stream;
+        bool need_metadata;
+        bool meteringOnly;
+    } InternalRequest;
 
     static int getCamInfo(uint32_t cameraId, struct camera_info *info);
     static int initCapabilities(uint32_t cameraId);
@@ -178,7 +214,12 @@ public:
     int initialize(const camera3_callback_ops_t *callback_ops);
     int configureStreams(camera3_stream_configuration_t *stream_list);
     int configureStreamsPerfLocked(camera3_stream_configuration_t *stream_list);
-    int processCaptureRequest(camera3_capture_request_t *request);
+    int processCaptureRequest(camera3_capture_request_t *request,
+                              List<InternalRequest> &internalReqs);
+    int orchestrateRequest(camera3_capture_request_t *request);
+    void orchestrateResult(camera3_capture_result_t *result);
+    void orchestrateNotify(camera3_notify_msg_t *notify_msg);
+
     void dump(int fd);
     int flushPerf();
 
@@ -193,7 +234,8 @@ public:
     camera_metadata_t* translateFromHalMetadata(metadata_buffer_t *metadata,
                             nsecs_t timestamp, int32_t request_id,
                             const CameraMetadata& jpegMetadata, uint8_t pipeline_depth,
-                            uint8_t capture_intent, bool pprocDone, uint8_t fwk_cacMode);
+                            uint8_t capture_intent, bool pprocDone, uint8_t fwk_cacMode,
+                            bool firstMetadataInBatch);
     camera_metadata_t* saveRequestSettings(const CameraMetadata& jpegMetadata,
                             camera3_capture_request_t *request);
     int initParameters();
@@ -222,6 +264,10 @@ public:
     const char *getEepromVersionInfo();
     const uint32_t *getLdafCalib();
     void get3AVersion(cam_q3a_version_t &swVersion);
+    static void setBufferErrorStatus(QCamera3Channel*, uint32_t frameNumber,
+            camera3_buffer_status_t err, void *userdata);
+    void setBufferErrorStatus(QCamera3Channel*, uint32_t frameNumber,
+            camera3_buffer_status_t err);
 
     // Get dual camera related info
     bool isDeviceLinked() {return mIsDeviceLinked;}
@@ -282,7 +328,8 @@ private:
             int32_t scalar_format, const cam_dimension_t &dim,
             int32_t config_type);
 
-    int validateCaptureRequest(camera3_capture_request_t *request);
+    int validateCaptureRequest(camera3_capture_request_t *request,
+                               List<InternalRequest> &internallyRequestedStreams);
     int validateStreamDimensions(camera3_stream_configuration_t *streamList);
     int validateStreamRotations(camera3_stream_configuration_t *streamList);
     void deriveMinFrameDuration();
@@ -290,7 +337,8 @@ private:
     int32_t handlePendingReprocResults(uint32_t frame_number);
     int64_t getMinFrameDuration(const camera3_capture_request_t *request);
     void handleMetadataWithLock(mm_camera_super_buf_t *metadata_buf,
-            bool free_and_bufdone_meta_buf);
+            bool free_and_bufdone_meta_buf,
+            bool firstMetadataInBatch);
     void handleBatchMetadata(mm_camera_super_buf_t *metadata_buf,
             bool free_and_bufdone_meta_buf);
     void handleBufferWithLock(camera3_stream_buffer_t *buffer,
@@ -307,6 +355,7 @@ private:
 
     bool isSupportChannelNeeded(camera3_stream_configuration_t *streamList,
             cam_stream_size_info_t stream_config_info);
+    bool isHdrSnapshotRequest(camera3_capture_request *request);
     int32_t setMobicat();
 
     int32_t getSensorOutputSize(cam_dimension_t &sensor_dim);
@@ -319,18 +368,23 @@ private:
 
     void addToPPFeatureMask(int stream_format, uint32_t stream_idx);
     void updateFpsInPreviewBuffer(metadata_buffer_t *metadata, uint32_t frame_number);
-
+#ifndef USE_HAL_3_3
+    void updateTimeStampInPendingBuffers(uint32_t frameNumber, nsecs_t timestamp);
+#endif
     void enablePowerHint();
     void disablePowerHint();
     int32_t dynamicUpdateMetaStreamInfo();
     int32_t startAllChannels();
     int32_t stopAllChannels();
     int32_t notifyErrorForPendingRequests();
+    void notifyError(uint32_t frameNumber,
+            camera3_error_msg_code_t errorCode);
     int32_t getReprocessibleOutputStreamId(uint32_t &id);
     int32_t handleCameraDeviceError();
 
     bool isOnEncoder(const cam_dimension_t max_viewfinder_size,
             uint32_t width, uint32_t height);
+    void restoreHdrScene(uint8_t sceneMode, const camera_metadata_t *result);
     void hdrPlusPerfLock(mm_camera_super_buf_t *metadata_buf);
 
     static bool supportBurstCapture(uint32_t cameraId);
@@ -367,6 +421,7 @@ private:
     bool mFlush;
     bool mFlushPerf;
     bool mEnableRawDump;
+    bool mForceHdrSnapshot;
     QCamera3HeapMemory *mParamHeap;
     metadata_buffer_t* mParameters;
     metadata_buffer_t* mPrevParameters;
@@ -375,6 +430,7 @@ private:
     bool m_bIs4KVideo;
     bool m_bEisSupportedSize;
     bool m_bEisEnable;
+    bool m_bEisSupported;
     typedef struct {
         cam_dimension_t dim;
         int format;
@@ -387,6 +443,7 @@ private:
     int8_t  mSupportedFaceDetectMode;
     uint8_t m_bTnrPreview;
     uint8_t m_bTnrVideo;
+    uint8_t m_debug_avtimer;
 
     /* Data structure to store pending request */
     typedef struct {
@@ -396,11 +453,13 @@ private:
         // in order to generate the buffer.
         bool need_metadata;
     } RequestedBufferInfo;
+
     typedef struct {
         uint32_t frame_number;
         uint32_t num_buffers;
         int32_t request_id;
         List<RequestedBufferInfo> buffers;
+        List<InternalRequest> internalRequestList;
         int blob_request;
         uint8_t bUrgentReceived;
         nsecs_t timestamp;
@@ -412,6 +471,7 @@ private:
         uint8_t capture_intent;
         uint8_t fwkCacMode;
         bool shutter_notified;
+        uint8_t scene_mode;
     } PendingRequestInfo;
     typedef struct {
         uint32_t frame_number;
@@ -424,6 +484,7 @@ private:
         uint32_t frame_number;
     } PendingReprocessResult;
 
+    class FrameNumberRegistry _orchestrationDb;
     typedef KeyedVector<uint32_t, Vector<PendingBufferInfo> > FlushMap;
     typedef List<QCamera3HardwareInterface::PendingRequestInfo>::iterator
             pendingRequestIterator;
@@ -436,6 +497,7 @@ private:
     /* Use last frame number of the batch as key and first frame number of the
      * batch as value for that key */
     KeyedVector<uint32_t, uint32_t> mPendingBatchMap;
+    cam_stream_ID_t mBatchedStreamsArray;
 
     PendingBuffersMap mPendingBuffersMap;
     pthread_cond_t mRequestCond;
@@ -469,10 +531,14 @@ private:
     uint8_t mToBeQueuedVidBufs;
     // Fixed video fps
     float mHFRVideoFps;
+public:
     uint8_t mOpMode;
+private:
     uint32_t mFirstFrameNumberInBatch;
     camera3_stream_t mDummyBatchStream;
     bool mNeedSensorRestart;
+    uint32_t mMinInFlightRequests;
+    uint32_t mMaxInFlightRequests;
 
     /* sensor output size with current stream configuration */
     QCamera3CropRegionMapper mCropRegionMapper;
@@ -482,6 +548,7 @@ private:
     uint32_t mLdafCalib[2];
     bool mPowerHintEnabled;
     int32_t mLastCustIntentFrmNum;
+    CameraMetadata  mCachedMetadata;
 
     static const QCameraMap<camera_metadata_enum_android_control_effect_mode_t,
             cam_effect_mode_type> EFFECT_MODES_MAP[];
@@ -528,6 +595,13 @@ private:
     QCamera3HeapMemory *m_pRelCamSyncHeap;
     cam_sync_related_sensors_event_info_t *m_pRelCamSyncBuf;
     cam_sync_related_sensors_event_info_t m_relCamSyncInfo;
+
+    //The offset between BOOTTIME and MONOTONIC timestamps
+    nsecs_t mBootToMonoTimestampOffset;
+    bool mUseAVTimer;
+
+
+    uint8_t mCurrentSceneMode;
 
 };
 

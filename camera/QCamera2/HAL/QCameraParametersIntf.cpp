@@ -581,11 +581,27 @@ bool QCameraParametersIntf::isDISEnabled()
     return mImpl->isDISEnabled();
 }
 
-cam_is_type_t QCameraParametersIntf::getISType()
+bool QCameraParametersIntf::isAVTimerEnabled()
 {
     Mutex::Autolock lock(mLock);
     CHECK_PARAM_INTF(mImpl);
-    return mImpl->getISType();
+    return mImpl->isAVTimerEnabled();
+}
+
+
+int32_t QCameraParametersIntf::setISType()
+{
+    Mutex::Autolock lock(mLock);
+    CHECK_PARAM_INTF(mImpl);
+    return mImpl->setISType();
+}
+
+
+cam_is_type_t QCameraParametersIntf::getVideoISType()
+{
+    Mutex::Autolock lock(mLock);
+    CHECK_PARAM_INTF(mImpl);
+    return mImpl->getVideoISType();
 }
 
 cam_is_type_t QCameraParametersIntf::getPreviewISType()
@@ -1082,11 +1098,11 @@ int32_t QCameraParametersIntf::configFrameCapture(bool commitSettings)
     return mImpl->configFrameCapture(commitSettings);
 }
 
-int32_t QCameraParametersIntf::resetFrameCapture(bool commitSettings)
+int32_t QCameraParametersIntf::resetFrameCapture(bool commitSettings, bool lowLightEnabled)
 {
     Mutex::Autolock lock(mLock);
     CHECK_PARAM_INTF(mImpl);
-    return mImpl->resetFrameCapture(commitSettings);
+    return mImpl->resetFrameCapture(commitSettings,lowLightEnabled);
 }
 
 cam_still_more_t QCameraParametersIntf::getStillMoreSettings()

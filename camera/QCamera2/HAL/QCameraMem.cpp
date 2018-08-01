@@ -44,7 +44,6 @@
 #include "QCameraTrace.h"
 
 // Media dependencies
-#include "OMX_QCOMExtns.h"
 #ifdef USE_MEDIA_EXTENSIONS
 #include <media/hardware/HardwareAPI.h>
 typedef struct VideoNativeHandleMetadata media_metadata_buffer;
@@ -653,7 +652,7 @@ int QCameraMemoryPool::findBufferLocked(
         size_t size, bool cached, cam_stream_type_t streamType)
 {
     int rc = NAME_NOT_FOUND;
-
+    size_t alignsize = (size + 4095U) & (~4095U);
     if (mPools[streamType].empty()) {
         return NAME_NOT_FOUND;
     }
@@ -661,7 +660,7 @@ int QCameraMemoryPool::findBufferLocked(
     List<struct QCameraMemory::QCameraMemInfo>::iterator it = mPools[streamType].begin();
     if (streamType == CAM_STREAM_TYPE_OFFLINE_PROC) {
         for( ; it != mPools[streamType].end() ; it++) {
-            if( ((*it).size == size) &&
+            if( ((*it).size == alignsize) &&
                     ((*it).heap_id == heap_id) &&
                     ((*it).cached == cached) ) {
                 memInfo = *it;
@@ -2142,17 +2141,9 @@ int QCameraGrallocMemory::allocate(uint8_t count, size_t /*size*/,
          goto end;
     }
 
-    err = mWindow->set_buffers_geometry(mWindow, mStride, mScanline, mFormat);
+    err = mWindow->set_buffers_geometry(mWindow, mWidth, mHeight, mFormat);
     if (err != 0) {
          LOGE("set_buffers_geometry failed: %s (%d)",
-                strerror(-err), -err);
-         ret = UNKNOWN_ERROR;
-         goto end;
-    }
-
-    err = mWindow->set_crop(mWindow, 0, 0, mWidth, mHeight);
-    if (err != 0) {
-         LOGE("set_crop failed: %s (%d)",
                 strerror(-err), -err);
          ret = UNKNOWN_ERROR;
          goto end;

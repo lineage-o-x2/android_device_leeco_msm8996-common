@@ -88,6 +88,7 @@ QCamera3PostProcessor::QCamera3PostProcessor(QCamera3ProcessingChannel* ch_ctrl)
 {
     memset(&mJpegHandle, 0, sizeof(mJpegHandle));
     memset(&mJpegMetadata, 0, sizeof(mJpegMetadata));
+    mReprocessNode.clear();
     pthread_mutex_init(&mReprocJobLock, NULL);
 }
 
@@ -581,16 +582,103 @@ int32_t QCamera3PostProcessor::processData(mm_camera_super_buf_t *input,
     pp_buffer->input = input;
     pp_buffer->output = output;
     pp_buffer->frameNumber = frameNumber;
-    m_inputPPQ.enqueue((void *)pp_buffer);
     if (!(m_inputMetaQ.isEmpty())) {
-        LOGD("meta queue is not empty, do next job");
-        m_dataProcTh.sendCmd(CAMERA_CMD_TYPE_DO_NEXT_JOB, FALSE, FALSE);
-    } else
+        qcamera_hal3_meta_pp_buffer_t *meta_job = isMetaMatched(frameNumber);
+        if(meta_job != NULL) {
+            ReprocessBuffer reproc;
+            reproc.metaBuffer = meta_job;
+            reproc.reprocBuf = pp_buffer;
+            mReprocessNode.push_back(reproc);
+            LOGD("meta queue is not empty, do next job");
+            m_dataProcTh.sendCmd(CAMERA_CMD_TYPE_DO_NEXT_JOB, FALSE, FALSE);
+        } else {
+            m_inputPPQ.enqueue((void *)pp_buffer);
+        }
+    } else {
         LOGD("metadata queue is empty");
+        m_inputPPQ.enqueue((void *)pp_buffer);
+    }
     pthread_mutex_unlock(&mReprocJobLock);
 
     return NO_ERROR;
 }
+
+
+/*===========================================================================
+ * FUNCTION   : isMetaMatched
+ *
+ * DESCRIPTION: corresponding meta detection
+ *
+ * PARAMETERS :
+ *   @frame   : frame number
+ *
+ * RETURN     :
+ *  TRUE if Frame is present
+ *  FALSE if Frame is not released.
+ *
+ *==========================================================================*/
+qcamera_hal3_meta_pp_buffer_t* QCamera3PostProcessor::isMetaMatched(uint32_t resultFrameNumber)
+{
+    qcamera_hal3_meta_pp_buffer_t *meta_job =
+            (qcamera_hal3_meta_pp_buffer_t *)
+            m_inputMetaQ.dequeue(matchMetaFrameNum, (void*)&resultFrameNumber);
+    if(meta_job != NULL) {
+        return meta_job;
+    }
+    return NULL;
+}
+
+
+/*===========================================================================
+ * FUNCTION   : releaseReprocMetaBuffer
+ *
+ * DESCRIPTION: Release reprocessed Meta.
+ *
+ * PARAMETERS :
+*   @frame   : meta frame number
+ *
+ * RETURN     :
+ *  TRUE if Meta is released.
+ *  FALSE if Meta is not released.
+ *
+ *==========================================================================*/
+bool QCamera3PostProcessor::releaseReprocMetaBuffer(uint32_t resultFrameNumber)
+{
+    pthread_mutex_lock(&mReprocJobLock);
+    if (!(m_inputMetaQ.isEmpty())) {
+        mm_camera_super_buf_t *meta_buffer = NULL;
+        qcamera_hal3_meta_pp_buffer_t *meta_job =
+                (qcamera_hal3_meta_pp_buffer_t *)
+                m_inputMetaQ.dequeue(matchMetaFrameNum, (void*)&resultFrameNumber);
+        if(meta_job != NULL) {
+            meta_buffer = meta_job->metabuf;
+            m_parent->metadataBufDone(meta_buffer);
+            free(meta_job);
+            pthread_mutex_unlock(&mReprocJobLock);
+            return true;
+        }
+    }
+    pthread_mutex_unlock(&mReprocJobLock);
+    return false;
+}
+
+
+bool QCamera3PostProcessor::matchMetaFrameNum(void *data, void *, void *match_data)
+{
+    qcamera_hal3_meta_pp_buffer_t *job = (qcamera_hal3_meta_pp_buffer_t *) data;
+    uint32_t frame_num = *((uint32_t *) match_data);
+    return job->metaFrameNumber == frame_num;
+}
+
+
+bool QCamera3PostProcessor::matchReprocessFrameNum(void *data, void *, void *match_data)
+{
+    qcamera_hal3_pp_buffer_t *job = (qcamera_hal3_pp_buffer_t *) data;
+    uint32_t frame_num = *((uint32_t *) match_data);
+    LOGD(" Matching FrameNum :%d and %d",frame_num,job->frameNumber);
+    return job->frameNumber == frame_num;
+}
+
 
 /*===========================================================================
  * FUNCTION   : needsReprocess
@@ -704,21 +792,64 @@ int32_t QCamera3PostProcessor::processData(qcamera_fwk_input_pp_data_t *frame)
  *              none-zero failure code
  *
  *==========================================================================*/
-int32_t QCamera3PostProcessor::processPPMetadata(mm_camera_super_buf_t *reproc_meta)
+int32_t QCamera3PostProcessor::processPPMetadata(mm_camera_super_buf_t *reproc_meta,
+                               uint32_t framenum, bool dropFrame)
 {
     LOGD("E");
     pthread_mutex_lock(&mReprocJobLock);
+
+    qcamera_hal3_meta_pp_buffer_t *ppMetaBuf =
+        (qcamera_hal3_meta_pp_buffer_t *)malloc(sizeof(qcamera_hal3_meta_pp_buffer_t));
+
     // enqueue to metadata input queue
-    m_inputMetaQ.enqueue((void *)reproc_meta);
+    ppMetaBuf->metabuf = reproc_meta;
+    ppMetaBuf->metaFrameNumber = framenum;
+    ppMetaBuf->dropFrame = dropFrame;
+    /* Need to send notifyError before meta for Error Buffer */
     if (!(m_inputPPQ.isEmpty())) {
-       LOGD("pp queue is not empty, do next job");
-       m_dataProcTh.sendCmd(CAMERA_CMD_TYPE_DO_NEXT_JOB, FALSE, FALSE);
+        qcamera_hal3_pp_buffer_t *reproc_job = isFrameMatched(framenum);
+        if(reproc_job != NULL) {
+            ReprocessBuffer reproc;
+            reproc.metaBuffer = ppMetaBuf;
+            reproc.reprocBuf = reproc_job;
+            mReprocessNode.push_back(reproc);
+            LOGD("pp queue is not empty, do next job");
+            m_dataProcTh.sendCmd(CAMERA_CMD_TYPE_DO_NEXT_JOB, FALSE, FALSE);
+        } else {
+             m_inputMetaQ.enqueue((void *)ppMetaBuf);
+        }
     } else {
+             m_inputMetaQ.enqueue((void *)ppMetaBuf);
        LOGD("pp queue is empty, not calling do next job");
     }
     pthread_mutex_unlock(&mReprocJobLock);
     return NO_ERROR;
 }
+
+
+/*===========================================================================
+ * FUNCTION   : isFrameMatched
+ *
+ * DESCRIPTION: corresponding meta detection
+ *
+ * PARAMETERS :
+ *   @frame   : frame number
+ *
+ * RETURN     :
+ *  TRUE if Frame is present
+ *  FALSE if Frame is not released.
+ *
+ *==========================================================================*/
+qcamera_hal3_pp_buffer_t* QCamera3PostProcessor::isFrameMatched(uint32_t resultFrameNumber)
+{
+    qcamera_hal3_pp_buffer_t *reprocess_job =
+            (qcamera_hal3_pp_buffer_t *)
+            m_inputPPQ.dequeue(matchReprocessFrameNum, (void*)&resultFrameNumber);
+    if(reprocess_job != NULL)
+        return reprocess_job;
+    return NULL;
+}
+
 
 /*===========================================================================
  * FUNCTION   : processJpegSettingData
@@ -896,7 +1027,9 @@ void QCamera3PostProcessor::releaseMetadata(void *data, void *user_data)
 {
     QCamera3PostProcessor *pme = (QCamera3PostProcessor *)user_data;
     if (NULL != pme) {
-        pme->m_parent->metadataBufDone((mm_camera_super_buf_t *)data);
+        qcamera_hal3_meta_pp_buffer_t *buf  = (qcamera_hal3_meta_pp_buffer_t *)data;
+        pme->m_parent->metadataBufDone((mm_camera_super_buf_t *)buf->metabuf);
+        free(buf);
     }
 }
 
@@ -1223,7 +1356,42 @@ int32_t QCamera3PostProcessor::encodeFWKData(qcamera_hal3_jpeg_data_t *jpeg_job_
     dst_dim.width = recvd_frame->reproc_config.output_stream_dim.width;
     dst_dim.height = recvd_frame->reproc_config.output_stream_dim.height;
 
+    cam_rect_t crop;
+    memset(&crop, 0, sizeof(cam_rect_t));
+    //TBD_later - Zoom event removed in stream
+    //main_stream->getCropInfo(crop);
+
+    // Set JPEG encode crop in reprocess frame metadata
+    // If this JPEG crop info exist, encoder should do cropping
+    IF_META_AVAILABLE(cam_stream_crop_info_t, jpeg_crop,
+            CAM_INTF_PARM_JPEG_ENCODE_CROP, metadata) {
+        memcpy(&crop, &(jpeg_crop->crop), sizeof(cam_rect_t));
+    }
+
+    // Set JPEG encode crop in reprocess frame metadata
+    // If this JPEG scale info exist, encoder should do scaling
+    IF_META_AVAILABLE(cam_dimension_t, scale_dim,
+            CAM_INTF_PARM_JPEG_SCALE_DIMENSION, metadata) {
+        if (scale_dim->width != 0 && scale_dim->height != 0) {
+            dst_dim.width = scale_dim->width;
+            dst_dim.height = scale_dim->height;
+        }
+    }
+
     needJpegExifRotation = (hal_obj->needJpegExifRotation() || !needsReprocess(recvd_frame));
+
+    // If EXIF rotation metadata is added and used to match the JPEG orientation,
+    // it means CPP rotation is not involved, whether it is because CPP does not
+    // support rotation, or the reprocessed frame is not sent to CPP.
+    // Override CAM_INTF_PARM_ROTATION to 0 to avoid wrong CPP rotation info
+    // to be filled in to JPEG metadata.
+    if (needJpegExifRotation) {
+        cam_rotation_info_t rotation_info;
+        memset(&rotation_info, 0, sizeof(rotation_info));
+        rotation_info.rotation = ROTATE_0;
+        rotation_info.streamId = 0;
+        ADD_SET_PARAM_ENTRY_TO_BATCH(metadata, CAM_INTF_PARM_ROTATION, rotation_info);
+    }
 
     LOGH("Need new session?:%d", needNewSess);
     if (needNewSess) {
@@ -1268,10 +1436,6 @@ int32_t QCamera3PostProcessor::encodeFWKData(qcamera_hal3_jpeg_data_t *jpeg_job_
         encodeParam.main_dim.dst_dim = dst_dim;
         encodeParam.thumb_dim.dst_dim = jpeg_settings->thumbnail_size;
 
-        if (needJpegExifRotation) {
-            encodeParam.thumb_rotation = (uint32_t)jpeg_settings->jpeg_orientation;
-        }
-
         LOGI("Src Buffer cnt = %d, res = %dX%d len = %d rot = %d "
             "src_dim = %dX%d dst_dim = %dX%d",
             encodeParam.num_src_bufs,
@@ -1310,11 +1474,6 @@ int32_t QCamera3PostProcessor::encodeFWKData(qcamera_hal3_jpeg_data_t *jpeg_job_
     jpg_job.encode_job.session_id = mJpegSessionId;
     jpg_job.encode_job.src_index = 0;
     jpg_job.encode_job.dst_index = 0;
-
-    cam_rect_t crop;
-    memset(&crop, 0, sizeof(cam_rect_t));
-    //TBD_later - Zoom event removed in stream
-    //main_stream->getCropInfo(crop);
 
     // Set main dim job parameters and handle rotation
     if (!needJpegExifRotation && (jpeg_settings->jpeg_orientation == 90 ||
@@ -1362,7 +1521,6 @@ int32_t QCamera3PostProcessor::encodeFWKData(qcamera_hal3_jpeg_data_t *jpeg_job_
     // thumbnail dim
     LOGH("Thumbnail needed:%d", m_bThumbnailNeeded);
     if (m_bThumbnailNeeded == TRUE) {
-        memset(&crop, 0, sizeof(cam_rect_t));
         jpg_job.encode_job.thumb_dim.dst_dim =
                 jpeg_settings->thumbnail_size;
 
@@ -1374,9 +1532,18 @@ int32_t QCamera3PostProcessor::encodeFWKData(qcamera_hal3_jpeg_data_t *jpeg_job_
             jpg_job.encode_job.thumb_dim.dst_dim.width =
                     jpg_job.encode_job.thumb_dim.dst_dim.height;
             jpg_job.encode_job.thumb_dim.dst_dim.height = temp;
+
+            jpg_job.encode_job.thumb_dim.src_dim.width = src_dim.height;
+            jpg_job.encode_job.thumb_dim.src_dim.height = src_dim.width;
+
+            jpg_job.encode_job.thumb_dim.crop.width = crop.height;
+            jpg_job.encode_job.thumb_dim.crop.height = crop.width;
+            jpg_job.encode_job.thumb_dim.crop.left = crop.top;
+            jpg_job.encode_job.thumb_dim.crop.top = crop.left;
+        } else {
+            jpg_job.encode_job.thumb_dim.src_dim = src_dim;
+            jpg_job.encode_job.thumb_dim.crop = crop;
         }
-        jpg_job.encode_job.thumb_dim.src_dim = src_dim;
-        jpg_job.encode_job.thumb_dim.crop = crop;
         jpg_job.encode_job.thumb_index = 0;
     }
 
@@ -1613,6 +1780,13 @@ int32_t QCamera3PostProcessor::encodeData(qcamera_hal3_jpeg_data_t *jpeg_job_dat
             LOGH("Need EXIF JPEG ROTATION");
         }
     }
+
+    // Although in HAL3, legacy flip mode is not advertised
+    // default value of CAM_INTF_PARM_FLIP is still added here
+    // for jpge metadata
+    int32_t flipMode = 0; // no flip
+    ADD_SET_PARAM_ENTRY_TO_BATCH(metadata, CAM_INTF_PARM_FLIP, flipMode);
+
     LOGH("Need new session?:%d", needNewSess);
     if (needNewSess) {
         //creating a new session, so we must destroy the old one
@@ -1655,10 +1829,6 @@ int32_t QCamera3PostProcessor::encodeData(qcamera_hal3_jpeg_data_t *jpeg_job_dat
         }
         encodeParam.main_dim.dst_dim = dst_dim;
         encodeParam.thumb_dim.dst_dim = jpeg_settings->thumbnail_size;
-
-        if (needJpegExifRotation) {
-            encodeParam.thumb_rotation = (uint32_t)jpeg_settings->jpeg_orientation;
-        }
 
         LOGI("Src Buffer cnt = %d, res = %dX%d len = %d rot = %d "
             "src_dim = %dX%d dst_dim = %dX%d",
@@ -1747,7 +1917,6 @@ int32_t QCamera3PostProcessor::encodeData(qcamera_hal3_jpeg_data_t *jpeg_job_dat
     // thumbnail dim
     LOGH("Thumbnail needed:%d", m_bThumbnailNeeded);
     if (m_bThumbnailNeeded == TRUE) {
-        memset(&crop, 0, sizeof(cam_rect_t));
         jpg_job.encode_job.thumb_dim.dst_dim =
                 jpeg_settings->thumbnail_size;
 
@@ -1763,10 +1932,15 @@ int32_t QCamera3PostProcessor::encodeData(qcamera_hal3_jpeg_data_t *jpeg_job_dat
 
             jpg_job.encode_job.thumb_dim.src_dim.width = src_dim.height;
             jpg_job.encode_job.thumb_dim.src_dim.height = src_dim.width;
+
+            jpg_job.encode_job.thumb_dim.crop.width = crop.height;
+            jpg_job.encode_job.thumb_dim.crop.height = crop.width;
+            jpg_job.encode_job.thumb_dim.crop.left = crop.top;
+            jpg_job.encode_job.thumb_dim.crop.top = crop.left;
         } else {
            jpg_job.encode_job.thumb_dim.src_dim = src_dim;
+           jpg_job.encode_job.thumb_dim.crop = crop;
         }
-        jpg_job.encode_job.thumb_dim.crop = crop;
         jpg_job.encode_job.thumb_index = main_frame->buf_idx;
         LOGI("Thumbnail idx = %d src w/h (%dx%d), dst w/h (%dx%d)",
                 jpg_job.encode_job.thumb_index,
@@ -1941,6 +2115,7 @@ void *QCamera3PostProcessor::dataProcessRoutine(void *data)
             pme->m_inputPPQ.init();
             pme->m_inputFWKPPQ.init();
             pme->m_inputMetaQ.init();
+            pme->m_jpegSettingsQ.init();
             cam_sem_post(&cmdThread->sync_sem);
 
             break;
@@ -1982,6 +2157,7 @@ void *QCamera3PostProcessor::dataProcessRoutine(void *data)
                 pme->m_inputFWKPPQ.flush();
 
                 pme->m_inputMetaQ.flush();
+                pme->m_jpegSettingsQ.flush();
 
                 // signal cmd is completed
                 cam_sem_post(&cmdThread->sync_sem);
@@ -2068,11 +2244,16 @@ void *QCamera3PostProcessor::dataProcessRoutine(void *data)
 
                     LOGH("dequeuing pp frame");
                     pthread_mutex_lock(&pme->mReprocJobLock);
-                    if(!pme->m_inputPPQ.isEmpty() && !pme->m_inputMetaQ.isEmpty()) {
-                        qcamera_hal3_pp_buffer_t *pp_buffer =
-                            (qcamera_hal3_pp_buffer_t *)pme->m_inputPPQ.dequeue();
+                    if(pme->mReprocessNode.size()) {
+                        List<ReprocessBuffer>::iterator reprocData;
+                        reprocData = pme->mReprocessNode.begin();
+                        qcamera_hal3_pp_buffer_t *pp_buffer = reprocData->reprocBuf;
+                        qcamera_hal3_meta_pp_buffer_t *meta_pp_buffer = reprocData->metaBuffer;
+                        pme->mReprocessNode.erase(pme->mReprocessNode.begin());
+                        LOGD(" Reprocess Buffer Frame Number :%d  and %d",
+                                pp_buffer->frameNumber, meta_pp_buffer->metaFrameNumber);
                         meta_buffer =
-                            (mm_camera_super_buf_t *)pme->m_inputMetaQ.dequeue();
+                            (mm_camera_super_buf_t *)meta_pp_buffer->metabuf;
                         jpeg_settings_t *jpeg_settings =
                            (jpeg_settings_t *)pme->m_jpegSettingsQ.dequeue();
                         pthread_mutex_unlock(&pme->mReprocJobLock);
