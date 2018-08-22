@@ -23,8 +23,14 @@ DEVICE_PACKAGE_OVERLAYS += \
 -include $(LOCAL_PATH)/system_prop.mk
 
 # Ramdisk
-PRODUCT_COPY_FILES += \
-    $(call find-copy-subdir-files,*,device/leeco/msm8996-common/rootdir/root,root)
+PRODUCT_PACKAGES += \
+    fstab.qcom \
+    init.qcom.bt.sh \
+    init.qcom.rc \
+    init.qcom.sh \
+    init.qcom.power.rc \
+    init.qcom.usb.rc \
+    ueventd.qcom.rc
 
 # Permissions
 PRODUCT_COPY_FILES += \
