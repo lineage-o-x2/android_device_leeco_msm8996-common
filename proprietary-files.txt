@@ -770,5 +770,5 @@ vendor/lib/libwfdhdcpcp.so|ab6368f49c6acbc8a27aefd50282f267d16addac
 vendor/lib/libwfdmmservice.so|a99c38be9f6a6ce4a2767fb066191c2017fcb341
 vendor/lib/libwfdmodulehdcpsession.so|89fc62ee8f41bde6b2dcc9bcde3e52954ae5253d
 
-# Wi-Fi - Gemini 8.0.0/OPR1.170623.032/8.5.24
-vendor/bin/cnss-daemon
+# Wi-Fi - from daisy - 9/PKQ1.180917.001/V10.0.3.0.PDLMIXM
+vendor/bin/cnss-daemon|badadcc672341e36228301b02c2bfaa36be09233
