@@ -46,9 +46,9 @@ PRODUCT_PROPERTY_OVERRIDES += \
 # Bluetooth
 PRODUCT_PROPERTY_OVERRIDES += \
     bt.max.hfpclient.connections=1 \
-    qcom.bluetooth.soc=rome \
-    ro.bluetooth.wipower=true \
-    ro.bluetooth.emb_wp_mode=true
+    ro.vendor.bluetooth.wipower=true \
+    ro.vendor.bluetooth.emb_wp_mode=true \
+    vendor.qcom.bluetooth.soc=rome
 
 # Property for vendor specific library
 PRODUCT_PROPERTY_OVERRIDES += \
@@ -92,7 +92,7 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.sys.le_fast_chrg_enable=1
 
-# FRP
+# Factory reset protection
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.frp.pst=/dev/block/bootdevice/by-name/frp
 
@@ -145,15 +145,17 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     DEVICE_PROVISIONED=1 \
     rild.libpath=/vendor/lib64/libril-qc-qmi-1.so \
+    vendor.rild.libpath=/vendor/lib64/libril-qc-qmi-1.so \
     ril.subscription.types=NV,RUIM \
     ro.telephony.call_ring.multiple=false \
     persist.data.qmi.adb_logmask=0 \
     persist.net.doxlat=true \
-    persist.radio.apm_sim_not_pwdn=1 \
-    persist.radio.csvt.enabled=false \
-    persist.radio.REVERSE_QMI=0 \
-    persist.radio.ROTATION_ENABLE=1 \
     persist.rcs.supported=1 \
+    persist.vendor.data.mode=concurrent \
+    persist.vendor.radio.apm_sim_not_pwdn=1 \
+    persist.vendor.radio.sib16_support=1 \
+    persist.vendor.radio.custom_ecc=1 \
+    persist.vendor.radio.rat_on=combine \
     persist.vendor.radio.cs_srv_type=1 \
     persist.vendor.radio.custom_ecc=1 \
     persist.vendor.radio.data_ltd_sys_ind=1 \
@@ -196,6 +198,6 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.timed.enable=true
 
-# Wifi
+# Wi-Fi
 PRODUCT_PROPERTY_OVERRIDES += \
     wifi.interface=wlan0
