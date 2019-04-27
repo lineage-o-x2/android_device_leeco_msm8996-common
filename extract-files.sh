@@ -74,11 +74,15 @@ function blob_fixup() {
 		;;
 
 	# Patch blobs for VNDK
-	vendor/lib/libmmcamera_ppeiscore.so | vendor/lib/libletv_algo_jni.so | vendor/lib/libcamera_letv_algo.so)
-        sed -i "s|libgui.so|libfui.so|g" "${2}"
+	vendor/lib/libmmcamera_ppeiscore.so | vendor/lib/libcamera_letv_algo.so)
+		sed -i "s|libgui.so|libfui.so|g" "${2}"
 		;;
 	vendor/lib/libarcsoft_hdr_detection.so | vendor/lib/libmpbase.so | vendor/lib/libarcsoft_panorama_burstcapture.so | vendor/lib/libarcsoft_smart_denoise.so | vendor/lib/libarcsoft_nighthawk.so | vendor/lib/libarcsoft_hdr.so | vendor/lib/libarcsoft_night_shot.so)
 		patchelf --remove-needed "libandroid.so" "${2}"
+		;;
+	vendor/lib/libletv_algo_jni.so)
+		sed -i "s|libgui.so|libfui.so|g" "${2}"
+		patchelf --remove-needed "libandroid_runtime.so" "${2}"
 		;;
 
 	# use /sbin instead of /system/bin for TWRP
